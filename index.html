@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Local AI Chat</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f13;
+      color: #e8e8f0;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1rem 1.5rem;
+      background: #1a1a24;
+      border-bottom: 1px solid #2a2a3a;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    header h1 { font-size: 1.1rem; font-weight: 600; }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 6px #22c55e;
+      flex-shrink: 0;
+    }
+    .status-dot.offline { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+
+    .config-bar {
+      padding: 0.75rem 1.5rem;
+      background: #15151f;
+      border-bottom: 1px solid #2a2a3a;
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .config-bar label { font-size: 0.8rem; color: #888; }
+
+    .config-bar input, .config-bar textarea {
+      background: #1a1a24;
+      border: 1px solid #2a2a3a;
+      border-radius: 6px;
+      color: #e8e8f0;
+      padding: 0.4rem 0.7rem;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .config-bar input:focus, .config-bar textarea:focus { border-color: #6366f1; }
+    #serverUrl { width: 220px; }
+    #systemPrompt { width: 100%; resize: vertical; min-height: 48px; }
+
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .message {
+      max-width: 80%;
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      line-height: 1.6;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .message.user {
+      background: #6366f1;
+      align-self: flex-end;
+      border-bottom-right-radius: 3px;
+    }
+
+    .message.assistant {
+      background: #1e1e2e;
+      align-self: flex-start;
+      border: 1px solid #2a2a3a;
+      border-bottom-left-radius: 3px;
+    }
+
+    .message.thinking {
+      background: #1a1a24;
+      border: 1px dashed #3a3a4a;
+      color: #666;
+      font-style: italic;
+    }
+
+    .input-area {
+      padding: 1rem 1.5rem;
+      background: #1a1a24;
+      border-top: 1px solid #2a2a3a;
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    #userInput {
+      flex: 1;
+      background: #0f0f13;
+      border: 1px solid #2a2a3a;
+      border-radius: 8px;
+      color: #e8e8f0;
+      padding: 0.65rem 1rem;
+      font-size: 0.95rem;
+      resize: none;
+      outline: none;
+      min-height: 44px;
+      max-height: 150px;
+    }
+    #userInput:focus { border-color: #6366f1; }
+
+    button {
+      background: #6366f1;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0.65rem 1.25rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s;
+      align-self: flex-end;
+    }
+    button:hover { background: #4f52d1; }
+    button:disabled { background: #333; cursor: not-allowed; }
+
+    #clearBtn {
+      background: transparent;
+      border: 1px solid #2a2a3a;
+      color: #888;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    #clearBtn:hover { background: #1e1e2e; color: #ccc; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="status-dot" id="statusDot"></div>
+  <h1>🧠 Local AI Chat</h1>
+  <button id="clearBtn" style="margin-left:auto">Clear history</button>
+</header>
+
+<div class="config-bar">
+  <div style="display:flex;gap:0.5rem;align-items:center">
+    <label for="serverUrl">Server URL:</label>
+    <input id="serverUrl" type="text" value="http://localhost:1234" placeholder="http://192.168.1.100:1234" />
+  </div>
+  <div style="flex:1;min-width:200px">
+    <label for="systemPrompt">System Prompt:</label>
+    <textarea id="systemPrompt" placeholder="You are a helpful assistant.">You are a helpful, precise assistant. Be direct and clear in your answers.</textarea>
+  </div>
+</div>
+
+<div id="chat"></div>
+
+<div class="input-area">
+  <textarea id="userInput" placeholder="Type a message... (Enter = send, Shift+Enter = new line)" rows="1"></textarea>
+  <button id="sendBtn">Send</button>
+</div>
+
+<script>
+  const chat = document.getElementById('chat');
+  const userInput = document.getElementById('userInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const serverUrl = document.getElementById('serverUrl');
+  const systemPromptEl = document.getElementById('systemPrompt');
+  const statusDot = document.getElementById('statusDot');
+  const clearBtn = document.getElementById('clearBtn');
+
+  let history = [];
+
+  async function checkConnection() {
+    try {
+      const res = await fetch(`${serverUrl.value}/v1/models`, { signal: AbortSignal.timeout(2000) });
+      statusDot.className = res.ok ? 'status-dot' : 'status-dot offline';
+    } catch {
+      statusDot.className = 'status-dot offline';
+    }
+  }
+  checkConnection();
+  setInterval(checkConnection, 5000);
+  serverUrl.addEventListener('change', checkConnection);
+
+  function addMessage(role, content) {
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    div.textContent = content;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+  }
+
+  async function sendMessage() {
+    const text = userInput.value.trim();
+    if (!text) return;
+
+    userInput.value = '';
+    userInput.style.height = 'auto';
+    sendBtn.disabled = true;
+
+    addMessage('user', text);
+    history.push({ role: 'user', content: text });
+
+    const thinkingEl = addMessage('thinking', '⏳ Thinking...');
+
+    const messages = [];
+    const sp = systemPromptEl.value.trim();
+    if (sp) messages.push({ role: 'system', content: sp });
+    messages.push(...history);
+
+    try {
+      const res = await fetch(`${serverUrl.value}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'local-model', // LM Studio ignores this value
+          messages,
+          temperature: 0.7,
+          max_tokens: 2048,
+          stream: false
+        })
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const reply = data.choices?.[0]?.message?.content ?? '(No response)';
+
+      thinkingEl.remove();
+      addMessage('assistant', reply);
+      history.push({ role: 'assistant', content: reply });
+
+    } catch (err) {
+      thinkingEl.remove();
+      addMessage('assistant', `❌ Error: ${err.message}\n\nMake sure LM Studio is running and the server is started.`);
+    }
+
+    sendBtn.disabled = false;
+    userInput.focus();
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+
+  userInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  userInput.addEventListener('input', () => {
+    userInput.style.height = 'auto';
+    userInput.style.height = Math.min(userInput.scrollHeight, 150) + 'px';
+  });
+
+  clearBtn.addEventListener('click', () => {
+    history = [];
+    chat.innerHTML = '';
+  });
+</script>
+</body>
+</html>
